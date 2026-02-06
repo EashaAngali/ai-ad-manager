@@ -1,0 +1,8 @@
+spring:
+  profiles:
+    active: dev
+
+app:
+  gemini:
+    apiKey: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:gemini-1.5-flash}

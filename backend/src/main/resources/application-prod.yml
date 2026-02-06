@@ -1,0 +1,13 @@
+server:
+  port: ${PORT:8080}
+
+spring:
+  datasource:
+    # Render will provide DATABASE_URL or you can set JDBC_DATABASE_URL manually
+    url: ${JDBC_DATABASE_URL:${DATABASE_URL:}}
+    username: ${DB_USER:}
+    password: ${DB_PASSWORD:}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
