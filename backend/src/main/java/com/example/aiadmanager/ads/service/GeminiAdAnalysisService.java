@@ -65,7 +65,6 @@ public class GeminiAdAnalysisService {
                         })
                 },
                 "generationConfig", Map.of(
-                        "response_Mime_Type", "application/json",
                         "temperature", 0.4
                 )
         );
