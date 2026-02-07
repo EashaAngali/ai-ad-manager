@@ -65,12 +65,12 @@ public class GeminiAdAnalysisService {
                         })
                 },
                 "generationConfig", Map.of(
-                        "responseMimeType", "application/json",
+                        "response_Mime_Type", "application/json",
                         "temperature", 0.4
                 )
         );
 
-       String url = "https://generativelanguage.googleapis.com/v1/models/"
+       String url = "https://generativelanguage.googleapis.com/v1beta/models/"
         + model + ":generateContent?key=" + apiKey;
 
 
