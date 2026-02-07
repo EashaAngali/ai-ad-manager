@@ -14,9 +14,10 @@ public class CorsConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/api/**")
-                        .allowedOrigins("https://ai-ad-manager-8.onrender.com")
-                        .allowedMethods("GET","POST","OPTIONS")
-                        .allowedHeaders("*");
+                        .allowedOriginPatterns("https://*.onrender.com")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowedHeaders("*")
+                        .maxAge(3600);
             }
         };
     }
