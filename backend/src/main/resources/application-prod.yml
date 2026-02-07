@@ -16,3 +16,7 @@ spring:
     multipart:
       max-file-size: 25MB
       max-request-size: 25MB
+app:
+  gemini:
+    apiKey: ${GEMINI_API_KEY:}
+    model: ${GEMINI_MODEL:gemini-2.0-flash}
