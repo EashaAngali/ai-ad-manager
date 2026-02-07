@@ -13,11 +13,7 @@ public class CorsConfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**")
-                        .allowedOrigins(
-                                "http://localhost:5173",
-                                "https://ai-ad-manager.onrender.com",
-                                "https://ai-ad-manager-frontend.onrender.com"
-                        )
+                        .allowedOrigins("*")
                         .allowedMethods("GET","POST","PUT","DELETE","OPTIONS")
                         .allowedHeaders("*");
             }
