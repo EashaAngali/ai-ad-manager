@@ -1,5 +1,4 @@
 package com.example.aiadmanager.ads.controller;
-
 import com.example.aiadmanager.ads.dto.AdCritiqueResponse;
 import com.example.aiadmanager.ads.model.AdCritique;
 import com.example.aiadmanager.ads.repo.AdCritiqueRepository;
