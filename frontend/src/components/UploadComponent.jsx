@@ -6,7 +6,7 @@ export default function UploadComponent({ onUploaded }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const API = import.meta.env.VITE_API_BASE || "https://ai-ad-manager-exnc.onrender.com/";
+ const API = (import.meta.env.VITE_API_BASE || "https://ai-ad-manager-7.onrender.com").replace(/\/$/, "");
 
   function handleFile(f) {
     setError("");
