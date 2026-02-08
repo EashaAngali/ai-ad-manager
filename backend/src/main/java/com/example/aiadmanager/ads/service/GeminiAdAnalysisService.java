@@ -69,7 +69,7 @@ public class GeminiAdAnalysisService {
                                                 "mimeType", contentType,
                                                 "data", b64
                                         ))
-                                )
+                                }
                         )
                 },
                 "generationConfig", Map.of(
