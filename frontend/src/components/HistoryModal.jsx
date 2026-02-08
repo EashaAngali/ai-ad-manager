@@ -1,13 +1,12 @@
 export default function HistoryModal({ open, row, onClose }) {
   if (!open || !row) return null;
 
-  // row.aiRaw may be string JSON (from your backend)
   let pretty = "";
   try {
-    const obj = typeof row.aiRaw === "string" ? JSON.parse(row.aiRaw) : row.aiRaw;
+    const obj = typeof row.aiJson === "string" ? JSON.parse(row.aiJson) : row.aiJson;
     pretty = JSON.stringify(obj, null, 2);
   } catch {
-    pretty = String(row.aiRaw ?? "");
+    pretty = String(row.aiJson ?? "");
   }
 
   return (
@@ -41,9 +40,9 @@ export default function HistoryModal({ open, row, onClose }) {
             {/* Image preview (if backend stores base64) */}
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Uploaded Image</div>
-              {row.base64 ? (
+              {row.imageBase64 ? (
                 <img
-                  src={`data:${row.contentType};base64,${row.base64}`}
+                  src={`data:${row.contentType};base64,${row.imageBase64}`}
                   alt={row.originalFilename}
                   className="w-full rounded-md"
                 />
