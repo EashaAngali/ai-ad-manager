@@ -1,29 +1,3 @@
-function getCritiqueObject(aiJson) {
-  try {
-    const obj = typeof aiJson === "string" ? JSON.parse(aiJson) : aiJson;
-    if (!obj) return null;
-
-    if (obj.overallScore !== undefined) return obj;
-
-    const parts = obj?.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      const text = parts.map(p => p.text || "").join("").trim();
-      if (!text) return null;
-
-      const cleaned = text
-        .replace(/^```json\s*/i, "")
-        .replace(/^```\s*/i, "")
-        .replace(/```$/i, "")
-        .trim();
-
-      return JSON.parse(cleaned);
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
 
 export default function HistoryModal({ open, row, onClose }) {
   if (!open || !row) return null;
@@ -156,4 +130,4 @@ export default function HistoryModal({ open, row, onClose }) {
     </div>
   );
 }
-App
+
