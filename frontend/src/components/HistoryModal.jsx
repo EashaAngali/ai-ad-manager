@@ -1,13 +1,34 @@
+function getCritiqueObject(aiJson) {
+  try {
+    const obj = typeof aiJson === "string" ? JSON.parse(aiJson) : aiJson;
+    if (!obj) return null;
+
+    if (obj.overallScore !== undefined) return obj;
+
+    const parts = obj?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      const text = parts.map(p => p.text || "").join("").trim();
+      if (!text) return null;
+
+      const cleaned = text
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      return JSON.parse(cleaned);
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export default function HistoryModal({ open, row, onClose }) {
   if (!open || !row) return null;
 
-  // Parse critique JSON (we will NOT show raw JSON)
-  let parsed = null;
-  try {
-    parsed = typeof row.aiJson === "string" ? JSON.parse(row.aiJson) : row.aiJson;
-  } catch {
-    parsed = null;
-  }
+  const parsed = getCritiqueObject(row.aiJson);
 
   const close = (e) => {
     e?.preventDefault?.();
@@ -15,36 +36,13 @@ export default function HistoryModal({ open, row, onClose }) {
     onClose?.();
   };
 
-  const copyReadable = async () => {
-    if (!parsed) return;
-    const text =
-      `Overall: ${parsed.overallScore ?? "?"}/10\n` +
-      `Hierarchy: ${parsed.scores?.visualHierarchy ?? "?"}/10\n` +
-      `Copy: ${parsed.scores?.copyEffectiveness ?? "?"}/10\n` +
-      `Color: ${parsed.scores?.colorTheory ?? "?"}/10\n\n` +
-      `Strengths:\n- ${(parsed.strengths || []).join("\n- ")}\n\n` +
-      `Issues:\n- ${(parsed.issues || []).join("\n- ")}\n\n` +
-      `Actionable Fixes:\n` +
-      (parsed.actionableFixes || [])
-        .map((x, i) => `${i + 1}) ${x.title}\nWhy: ${x.why}\nHow: ${x.how}`)
-        .join("\n\n") +
-      `\n\nHeadline Options:\n- ${(parsed.improvedHeadlineOptions || []).join("\n- ")}`;
-
-    await navigator.clipboard?.writeText(text);
-  };
-
   return (
     <div className="fixed inset-0 z-50">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/50"
-        onClick={close}
-      />
+      <div className="absolute inset-0 bg-black/50" onClick={close} />
 
-      {/* Modal */}
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div
-         className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
+          className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between px-5 py-4 border-b">
@@ -64,8 +62,7 @@ export default function HistoryModal({ open, row, onClose }) {
             </button>
           </div>
 
-         <div className="p-5 grid gap-4 md:grid-cols-2 overflow-auto">
-            {/* Image */}
+          <div className="p-5 grid gap-4 md:grid-cols-2">
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Uploaded Image</div>
               {row.imageBase64 ? (
@@ -75,23 +72,19 @@ export default function HistoryModal({ open, row, onClose }) {
                   className="w-full rounded-md"
                 />
               ) : (
-                <div className="text-sm text-gray-500">
-                  No image data available in this row.
-                </div>
+                <div className="text-sm text-gray-500">No image data.</div>
               )}
             </div>
 
-            {/* Human-readable critique (NO raw JSON) */}
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Critique</div>
 
               {!parsed ? (
                 <div className="text-sm text-red-600">
-                  Critique not available (AI returned invalid / truncated JSON). Increase maxOutputTokens.
+                  Critique JSON parse nahi ho raha. (Most common reason: Gemini response truncate / invalid JSON)
                 </div>
               ) : (
                 <div className="space-y-4">
-                  {/* Scores */}
                   <div className="grid grid-cols-2 gap-3">
                     <div className="p-3 rounded-lg bg-gray-50 border">
                       <div className="text-xs text-gray-500">Overall</div>
@@ -111,7 +104,6 @@ export default function HistoryModal({ open, row, onClose }) {
                     </div>
                   </div>
 
-                  {/* Strengths */}
                   <div>
                     <h3 className="font-semibold">Strengths</h3>
                     <ul className="list-disc pl-5 text-sm text-gray-700 mt-2 space-y-1">
@@ -119,7 +111,6 @@ export default function HistoryModal({ open, row, onClose }) {
                     </ul>
                   </div>
 
-                  {/* Issues */}
                   <div>
                     <h3 className="font-semibold">Issues</h3>
                     <ul className="list-disc pl-5 text-sm text-gray-700 mt-2 space-y-1">
@@ -127,7 +118,6 @@ export default function HistoryModal({ open, row, onClose }) {
                     </ul>
                   </div>
 
-                  {/* Fixes */}
                   <div>
                     <h3 className="font-semibold">Actionable Fixes</h3>
                     <div className="mt-2 space-y-2">
@@ -141,7 +131,6 @@ export default function HistoryModal({ open, row, onClose }) {
                     </div>
                   </div>
 
-                  {/* Headlines */}
                   <div>
                     <h3 className="font-semibold">Improved Headline Options</h3>
                     <ul className="list-disc pl-5 text-sm text-gray-700 mt-2 space-y-1">
@@ -156,15 +145,6 @@ export default function HistoryModal({ open, row, onClose }) {
           <div className="px-5 py-4 border-t flex justify-end gap-2">
             <button
               type="button"
-              className="px-3 py-2 rounded-md border border-gray-300 hover:border-black disabled:opacity-50"
-              disabled={!parsed}
-              onClick={copyReadable}
-              title={!parsed ? "Nothing to copy" : "Copy critique text"}
-            >
-              Copy Critique
-            </button>
-            <button
-              type="button"
               className="px-3 py-2 rounded-md bg-black text-white"
               onClick={close}
             >
@@ -176,3 +156,4 @@ export default function HistoryModal({ open, row, onClose }) {
     </div>
   );
 }
+App
