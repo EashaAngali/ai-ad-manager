@@ -21,7 +21,7 @@ public class GeminiAdAnalysisService {
     @Value("${app.gemini.apiKey:}")
     private String apiKey;
 
-    @Value("${app.gemini.model:gemini-1.5-flash}")
+    @Value("${app.gemini.model:gemini-2.5-flash}")
     private String model;
 
     public GeminiAdAnalysisService(AdCritiqueRepository repo) {
@@ -54,7 +54,7 @@ public class GeminiAdAnalysisService {
                 "  \"improvedHeadlineOptions\": string[]\n" +
                 "}";
 
-       Map<String, Object> body = Map.of(
+   Map<String, Object> body = Map.of(
     "contents", new Object[]{
         Map.of(
             "role", "user",
@@ -68,11 +68,12 @@ public class GeminiAdAnalysisService {
         )
     },
     "generationConfig", Map.of(
-        "temperature", 0.4,
+        "temperature", 0.3,
         "maxOutputTokens", 512,
-    "responseMimeType", "application/json"
+        "responseMimeType", "application/json"
     )
 );
+
 
         
        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
