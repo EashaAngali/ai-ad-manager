@@ -54,21 +54,27 @@ public class GeminiAdAnalysisService {
                 "  \"improvedHeadlineOptions\": string[]\n" +
                 "}";
 
-        Map<String, Object> body = Map.of(
-                "contents", new Object[]{
-                        Map.of("role", "user", "parts", new Object[]{
-                                Map.of("text", prompt),
-                                Map.of("inlineData", Map.of(
-                                        "mimeType", contentType,
-                                        "data", b64
-                                ))
-                        })
-                },
-                "generationConfig", Map.of(
-                        "temperature", 0.4
-                )
-        );
+       Map<String, Object> body = Map.of(
+    "contents", new Object[]{
+        Map.of(
+            "role", "user",
+            "parts", new Object[]{
+                Map.of("text", prompt),
+                Map.of("inlineData", Map.of(
+                    "mimeType", contentType,
+                    "data", b64
+                ))
+            }
+        )
+    },
+    "generationConfig", Map.of(
+        "temperature", 0.4,
+        "maxOutputTokens", 512,
+    "responseMimeType", "application/json"
+    )
+);
 
+        
        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
         + model + ":generateContent?key=" + apiKey;
 
