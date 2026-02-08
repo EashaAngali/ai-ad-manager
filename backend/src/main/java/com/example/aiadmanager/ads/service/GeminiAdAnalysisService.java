@@ -24,7 +24,7 @@ public class GeminiAdAnalysisService {
     @Value("${app.gemini.apiKey:}")
     private String apiKey;
 
-    @Value("${app.gemini.model:gemini-2.5-flash-lite}")
+    @Value("${app.gemini.model:gemini-2.5-flash}")
     private String model;
 
     public GeminiAdAnalysisService(AdCritiqueRepository repo) {
@@ -72,8 +72,8 @@ public class GeminiAdAnalysisService {
     },
     "generationConfig", Map.of(
         "temperature", 0.3,
-        "maxOutputTokens", 600,
-        "responseMimeType", "application/json"
+        "maxOutputTokens", 1200,
+        
     )
 );
 
