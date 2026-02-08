@@ -48,10 +48,9 @@ public class GeminiAdAnalysisService {
 
         String b64 = Base64.getEncoder().encodeToString(imageBytes);
 
-        // 1) First attempt: strict JSON, small limits (reduces truncation)
+        // 1) First attempt: strict JSON, forced non-empty arrays
         String prompt = buildPrimaryPrompt();
-
-        String aiRaw = callGeminiWithImage(prompt, b64, contentType, 1024);
+        String aiRaw = callGeminiWithImage(prompt, b64, contentType, 1400);
 
         // 2) Extract JSON safely + auto-repair if truncated
         String cleanJson = extractOrRepair(aiRaw);
@@ -65,45 +64,37 @@ public class GeminiAdAnalysisService {
     }
 
     private String buildPrimaryPrompt() {
-        // Tight output => fewer chances to hit MAX_TOKENS / truncation
         return
-            "Return ONLY valid JSON (no markdown, no commentary, no extra keys). " +
-            "All strings must be short and practical. " +
-            "Schema EXACTLY:\n" +
-            "{\n" +
-            "  \"overallScore\": number,\n" +
-            "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
-            "  \"strengths\": string[],\n" +
-            "  \"issues\": string[],\n" +
-            "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
-            "  \"improvedHeadlineOptions\": string[]\n" +
-            "}\n" +
-            "Limits: strengths max 5, issues max 5, actionableFixes max 3, improvedHeadlineOptions max 5. " +
-            "If unsure, keep it concise but still valid JSON.";
+                "Return ONLY valid JSON (no markdown, no extra keys). " +
+                "Schema EXACTLY: {overallScore:number,scores:{visualHierarchy:number,copyEffectiveness:number,colorTheory:number}," +
+                "strengths:string[],issues:string[],actionableFixes:{title:string,why:string,how:string}[],improvedHeadlineOptions:string[]}. " +
+                "HARD RULES: strengths MUST have exactly 5 items; issues MUST have exactly 5 items; " +
+                "actionableFixes MUST have exactly 3 items; improvedHeadlineOptions MUST have exactly 5 items. " +
+                "Never return empty arrays. Keep each item concise (<= 160 chars).";
     }
 
     private String buildRepairPrompt(String brokenText) {
-        // If Gemini output is truncated or invalid JSON, we repair it here.
-        // Force valid JSON, fill missing arrays as [] and missing strings as "".
         return
-            "You will be given a possibly TRUNCATED or INVALID JSON string. " +
-            "Fix it into VALID JSON that matches the exact schema below. " +
-            "Return ONLY the fixed JSON. No markdown. No explanations.\n\n" +
-            "Schema EXACTLY:\n" +
-            "{\n" +
-            "  \"overallScore\": number,\n" +
-            "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
-            "  \"strengths\": string[],\n" +
-            "  \"issues\": string[],\n" +
-            "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
-            "  \"improvedHeadlineOptions\": string[]\n" +
-            "}\n\n" +
-            "Rules:\n" +
-            "- Keep existing values if present.\n" +
-            "- If a field is missing, add it with a safe default: arrays [], strings \"\", numbers 0.\n" +
-            "- Ensure arrays respect max limits: strengths<=5, issues<=5, fixes<=3, headlines<=5.\n\n" +
-            "BROKEN_JSON:\n" +
-            brokenText;
+                "You will be given a possibly TRUNCATED or INVALID JSON string. " +
+                "Fix it into VALID JSON that matches the exact schema below. " +
+                "Return ONLY the fixed JSON. No markdown. No explanations.\n\n" +
+                "Schema EXACTLY:\n" +
+                "{\n" +
+                "  \"overallScore\": number,\n" +
+                "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
+                "  \"strengths\": string[],\n" +
+                "  \"issues\": string[],\n" +
+                "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
+                "  \"improvedHeadlineOptions\": string[]\n" +
+                "}\n\n" +
+                "Rules:\n" +
+                "- Keep existing values if present.\n" +
+                "- If a field is missing, add it, BUT never leave arrays empty.\n" +
+                "- strengths MUST have exactly 5 items; issues MUST have exactly 5 items; actionableFixes MUST have exactly 3 items; improvedHeadlineOptions MUST have exactly 5 items.\n" +
+                "- Enforce max limits: strengths<=5, issues<=5, fixes<=3, headlines<=5.\n" +
+                "- Keep each item concise (<= 160 chars).\n\n" +
+                "BROKEN_JSON:\n" +
+                brokenText;
     }
 
     private String callGeminiWithImage(String prompt, String imageB64, String contentType, int maxOutputTokens) {
@@ -116,7 +107,6 @@ public class GeminiAdAnalysisService {
                         "role", "user",
                         "parts", List.of(
                                 Map.of("text", prompt),
-                                // ✅ Correct keys for Gemini v1beta
                                 Map.of("inlineData", Map.of(
                                         "mimeType", contentType,
                                         "data", imageB64
@@ -180,12 +170,10 @@ public class GeminiAdAnalysisService {
     }
 
     private String extractOrRepair(String aiRaw) {
-        // Step A: read wrapper safely, detect MAX_TOKENS
         JsonNode root;
         try {
             root = mapper.readTree(aiRaw);
         } catch (Exception e) {
-            // If wrapper isn't JSON, just try repair text-only
             return repairFromBroken(aiRaw);
         }
 
@@ -194,45 +182,36 @@ public class GeminiAdAnalysisService {
             throw new RuntimeException("Gemini: no candidates. Raw: " + aiRaw);
         }
 
-        String finishReason = candidates.path(0).path("finishReason").asText("");
         String text = extractPartsText(candidates.path(0).path("content").path("parts")).trim();
-
-        // Sometimes Gemini returns JSON in parts directly; keep it as string
         String cleaned = stripCodeFences(text);
 
-        // Step B: try parse as JSON
         if (isValidCritiqueJson(cleaned)) {
             return cleaned;
         }
 
-        // Step C: If truncated or invalid, repair
-        // If finishReason is MAX_TOKENS, repair is required
         String broken = !cleaned.isBlank() ? cleaned : text;
         return repairFromBroken(broken);
     }
 
     private String repairFromBroken(String broken) {
-        // Give Gemini the broken JSON and ask to output valid JSON schema
         String repairPrompt = buildRepairPrompt(broken);
+        String repairRaw = callGeminiTextOnly(repairPrompt, 1200);
 
-        // Use text-only repair (cheaper + stable)
-        String repairRaw = callGeminiTextOnly(repairPrompt, 1024);
-
-        // Extract again (repair call also returns wrapper)
         try {
             JsonNode root2 = mapper.readTree(repairRaw);
             JsonNode candidates2 = root2.path("candidates");
             if (!candidates2.isArray() || candidates2.isEmpty()) {
                 throw new RuntimeException("Gemini repair: no candidates. Raw: " + repairRaw);
             }
+
             String repairedText = extractPartsText(candidates2.path(0).path("content").path("parts")).trim();
             repairedText = stripCodeFences(repairedText);
 
             if (!isValidCritiqueJson(repairedText)) {
                 throw new RuntimeException("Gemini repair returned invalid JSON. Raw: " + repairRaw);
             }
-            return repairedText;
 
+            return repairedText;
         } catch (Exception ex) {
             throw new RuntimeException("Invalid / truncated Gemini JSON. Raw: " + broken, ex);
         }
@@ -247,7 +226,6 @@ public class GeminiAdAnalysisService {
                 String t = p.path("text").asText("");
                 if (!t.isBlank()) sb.append(t);
             } else {
-                // In case JSON is returned in structured form
                 sb.append(p.toString());
             }
         }
@@ -266,13 +244,18 @@ public class GeminiAdAnalysisService {
         try {
             JsonNode critique = mapper.readTree(txt);
 
-            // Minimal schema checks (avoid crashing UI)
             if (!critique.has("overallScore")) return false;
             if (!critique.has("scores")) return false;
             if (!critique.has("strengths")) return false;
             if (!critique.has("issues")) return false;
             if (!critique.has("actionableFixes")) return false;
             if (!critique.has("improvedHeadlineOptions")) return false;
+
+            // ALSO enforce non-empty arrays (your requirement)
+            if (!critique.path("strengths").isArray() || critique.path("strengths").size() == 0) return false;
+            if (!critique.path("issues").isArray() || critique.path("issues").size() == 0) return false;
+            if (!critique.path("actionableFixes").isArray() || critique.path("actionableFixes").size() == 0) return false;
+            if (!critique.path("improvedHeadlineOptions").isArray() || critique.path("improvedHeadlineOptions").size() == 0) return false;
 
             return true;
         } catch (JsonProcessingException e) {
