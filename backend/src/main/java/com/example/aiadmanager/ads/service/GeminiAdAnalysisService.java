@@ -2,6 +2,7 @@ package com.example.aiadmanager.ads.service;
 
 import com.example.aiadmanager.ads.model.AdCritique;
 import com.example.aiadmanager.ads.repo.AdCritiqueRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,6 +14,8 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 
 import java.time.Duration;
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -45,38 +48,91 @@ public class GeminiAdAnalysisService {
 
         String b64 = Base64.getEncoder().encodeToString(imageBytes);
 
-        String prompt =
-                "Return ONLY valid JSON (no markdown, no extra keys). " +
-                "Shape: {overallScore:number,scores:{visualHierarchy:number,copyEffectiveness:number,colorTheory:number}," +
-                "strengths:string[],issues:string[],actionableFixes:{title:string,why:string,how:string}[],improvedHeadlineOptions:string[]}. " +
-                "Limits: strengths<=5, issues<=5, actionableFixes<=3, improvedHeadlineOptions<=5.";
+        // 1) First attempt: strict JSON, small limits (reduces truncation)
+        String prompt = buildPrimaryPrompt();
 
-        Map<String, Object> body = Map.of(
-                "contents", new Object[]{
-                        Map.of(
-                                "role", "user",
-                                "parts", new Object[]{
-                                        Map.of("text", prompt),
-                                        Map.of("inline_data", Map.of(
-                                                "mime_type", contentType,
-                                                "data", b64
-                                        ))
-                                }
-                        )
-                },
-                "generationConfig", Map.of(
-                        "temperature", 0.2,
-                        "maxOutputTokens", 2048,
-                        "responseMimeType", "application/json"
-                )
-        );
+        String aiRaw = callGeminiWithImage(prompt, b64, contentType, 1024);
 
+        // 2) Extract JSON safely + auto-repair if truncated
+        String cleanJson = extractOrRepair(aiRaw);
+
+        return repo.save(new AdCritique(
+                StringUtils.hasText(originalFilename) ? originalFilename : "upload",
+                contentType,
+                b64,
+                cleanJson
+        ));
+    }
+
+    private String buildPrimaryPrompt() {
+        // Tight output => fewer chances to hit MAX_TOKENS / truncation
+        return
+            "Return ONLY valid JSON (no markdown, no commentary, no extra keys). " +
+            "All strings must be short and practical. " +
+            "Schema EXACTLY:\n" +
+            "{\n" +
+            "  \"overallScore\": number,\n" +
+            "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
+            "  \"strengths\": string[],\n" +
+            "  \"issues\": string[],\n" +
+            "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
+            "  \"improvedHeadlineOptions\": string[]\n" +
+            "}\n" +
+            "Limits: strengths max 5, issues max 5, actionableFixes max 3, improvedHeadlineOptions max 5. " +
+            "If unsure, keep it concise but still valid JSON.";
+    }
+
+    private String buildRepairPrompt(String brokenText) {
+        // If Gemini output is truncated or invalid JSON, we repair it here.
+        // Force valid JSON, fill missing arrays as [] and missing strings as "".
+        return
+            "You will be given a possibly TRUNCATED or INVALID JSON string. " +
+            "Fix it into VALID JSON that matches the exact schema below. " +
+            "Return ONLY the fixed JSON. No markdown. No explanations.\n\n" +
+            "Schema EXACTLY:\n" +
+            "{\n" +
+            "  \"overallScore\": number,\n" +
+            "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
+            "  \"strengths\": string[],\n" +
+            "  \"issues\": string[],\n" +
+            "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
+            "  \"improvedHeadlineOptions\": string[]\n" +
+            "}\n\n" +
+            "Rules:\n" +
+            "- Keep existing values if present.\n" +
+            "- If a field is missing, add it with a safe default: arrays [], strings \"\", numbers 0.\n" +
+            "- Ensure arrays respect max limits: strengths<=5, issues<=5, fixes<=3, headlines<=5.\n\n" +
+            "BROKEN_JSON:\n" +
+            brokenText;
+    }
+
+    private String callGeminiWithImage(String prompt, String imageB64, String contentType, int maxOutputTokens) {
         String url = "https://generativelanguage.googleapis.com/v1beta/models/"
                 + model + ":generateContent?key=" + apiKey;
 
-        String aiRaw;
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("contents", List.of(
+                Map.of(
+                        "role", "user",
+                        "parts", List.of(
+                                Map.of("text", prompt),
+                                // ✅ Correct keys for Gemini v1beta
+                                Map.of("inlineData", Map.of(
+                                        "mimeType", contentType,
+                                        "data", imageB64
+                                ))
+                        )
+                )
+        ));
+
+        body.put("generationConfig", Map.of(
+                "temperature", 0.2,
+                "maxOutputTokens", maxOutputTokens,
+                "responseMimeType", "application/json"
+        ));
+
         try {
-            aiRaw = webClient.post()
+            return webClient.post()
                     .uri(url)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body)
@@ -88,58 +144,139 @@ public class GeminiAdAnalysisService {
         } catch (Exception e) {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
-
-        String cleanJson = extractCleanJsonOrThrow(aiRaw);
-
-        return repo.save(new AdCritique(
-                StringUtils.hasText(originalFilename) ? originalFilename : "upload",
-                contentType,
-                b64,
-                cleanJson
-        ));
     }
 
-    private String extractCleanJsonOrThrow(String aiRaw) {
+    private String callGeminiTextOnly(String prompt, int maxOutputTokens) {
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + model + ":generateContent?key=" + apiKey;
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("contents", List.of(
+                Map.of(
+                        "role", "user",
+                        "parts", List.of(Map.of("text", prompt))
+                )
+        ));
+
+        body.put("generationConfig", Map.of(
+                "temperature", 0.1,
+                "maxOutputTokens", maxOutputTokens,
+                "responseMimeType", "application/json"
+        ));
+
         try {
-            JsonNode root = mapper.readTree(aiRaw);
-            JsonNode candidates = root.path("candidates");
-            if (!candidates.isArray() || candidates.isEmpty()) {
-                throw new RuntimeException("Gemini: no candidates");
+            return webClient.post()
+                    .uri(url)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block(Duration.ofSeconds(60));
+        } catch (WebClientResponseException e) {
+            throw new RuntimeException("Gemini API failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
+        } catch (Exception e) {
+            throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
+        }
+    }
+
+    private String extractOrRepair(String aiRaw) {
+        // Step A: read wrapper safely, detect MAX_TOKENS
+        JsonNode root;
+        try {
+            root = mapper.readTree(aiRaw);
+        } catch (Exception e) {
+            // If wrapper isn't JSON, just try repair text-only
+            return repairFromBroken(aiRaw);
+        }
+
+        JsonNode candidates = root.path("candidates");
+        if (!candidates.isArray() || candidates.isEmpty()) {
+            throw new RuntimeException("Gemini: no candidates. Raw: " + aiRaw);
+        }
+
+        String finishReason = candidates.path(0).path("finishReason").asText("");
+        String text = extractPartsText(candidates.path(0).path("content").path("parts")).trim();
+
+        // Sometimes Gemini returns JSON in parts directly; keep it as string
+        String cleaned = stripCodeFences(text);
+
+        // Step B: try parse as JSON
+        if (isValidCritiqueJson(cleaned)) {
+            return cleaned;
+        }
+
+        // Step C: If truncated or invalid, repair
+        // If finishReason is MAX_TOKENS, repair is required
+        String broken = !cleaned.isBlank() ? cleaned : text;
+        return repairFromBroken(broken);
+    }
+
+    private String repairFromBroken(String broken) {
+        // Give Gemini the broken JSON and ask to output valid JSON schema
+        String repairPrompt = buildRepairPrompt(broken);
+
+        // Use text-only repair (cheaper + stable)
+        String repairRaw = callGeminiTextOnly(repairPrompt, 1024);
+
+        // Extract again (repair call also returns wrapper)
+        try {
+            JsonNode root2 = mapper.readTree(repairRaw);
+            JsonNode candidates2 = root2.path("candidates");
+            if (!candidates2.isArray() || candidates2.isEmpty()) {
+                throw new RuntimeException("Gemini repair: no candidates. Raw: " + repairRaw);
             }
+            String repairedText = extractPartsText(candidates2.path(0).path("content").path("parts")).trim();
+            repairedText = stripCodeFences(repairedText);
 
-            JsonNode parts = candidates.path(0).path("content").path("parts");
-            if (!parts.isArray() || parts.isEmpty()) {
-                throw new RuntimeException("Gemini: no parts");
+            if (!isValidCritiqueJson(repairedText)) {
+                throw new RuntimeException("Gemini repair returned invalid JSON. Raw: " + repairRaw);
             }
-
-            StringBuilder sb = new StringBuilder();
-            for (JsonNode p : parts) {
-                if (p.has("text")) {
-                    String t = p.path("text").asText("");
-                    if (!t.isBlank()) sb.append(t);
-                } else {
-                    // sometimes structured json lands here
-                    sb.append(p.toString());
-                }
-            }
-
-            String txt = sb.toString().trim();
-
-            txt = txt.replaceAll("(?s)^```json\\s*", "")
-                     .replaceAll("(?s)^```\\s*", "")
-                     .replaceAll("(?s)```\\s*$", "")
-                     .trim();
-
-            JsonNode critique = mapper.readTree(txt);
-
-            if (critique.path("overallScore").isMissingNode()) {
-                throw new RuntimeException("JSON valid but schema mismatch (missing overallScore)");
-            }
-
-            return txt;
+            return repairedText;
 
         } catch (Exception ex) {
-            throw new RuntimeException("Invalid / truncated Gemini JSON. Raw: " + aiRaw, ex);
+            throw new RuntimeException("Invalid / truncated Gemini JSON. Raw: " + broken, ex);
+        }
+    }
+
+    private String extractPartsText(JsonNode parts) {
+        if (!parts.isArray() || parts.isEmpty()) return "";
+
+        StringBuilder sb = new StringBuilder();
+        for (JsonNode p : parts) {
+            if (p.has("text")) {
+                String t = p.path("text").asText("");
+                if (!t.isBlank()) sb.append(t);
+            } else {
+                // In case JSON is returned in structured form
+                sb.append(p.toString());
+            }
+        }
+        return sb.toString();
+    }
+
+    private String stripCodeFences(String txt) {
+        if (txt == null) return "";
+        return txt.replaceAll("(?s)^```json\\s*", "")
+                .replaceAll("(?s)^```\\s*", "")
+                .replaceAll("(?s)```\\s*$", "")
+                .trim();
+    }
+
+    private boolean isValidCritiqueJson(String txt) {
+        try {
+            JsonNode critique = mapper.readTree(txt);
+
+            // Minimal schema checks (avoid crashing UI)
+            if (!critique.has("overallScore")) return false;
+            if (!critique.has("scores")) return false;
+            if (!critique.has("strengths")) return false;
+            if (!critique.has("issues")) return false;
+            if (!critique.has("actionableFixes")) return false;
+            if (!critique.has("improvedHeadlineOptions")) return false;
+
+            return true;
+        } catch (JsonProcessingException e) {
+            return false;
         }
     }
 }
