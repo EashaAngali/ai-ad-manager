@@ -18,21 +18,15 @@ function extractFirstJsonObject(text) {
 function normalizeScore(x) {
   const n = Number(x);
   if (!Number.isFinite(n)) return 0;
-
-  // If model gave 75 meaning 7.5
-  if (n > 10 && n <= 100) return n / 10;
-
-  // If model gave 0.75 meaning 7.5
-  if (n > 0 && n <= 1) return n * 10;
-
-  // Clamp
+  if (n > 10 && n <= 100) return n / 10;   // 75 -> 7.5
+  if (n > 0 && n <= 1) return n * 10;      // 0.75 -> 7.5
   return Math.max(0, Math.min(10, n));
 }
 
 function normalizeCritique(obj) {
   if (!obj || typeof obj !== "object") return null;
 
-  const normalized = {
+  return {
     overallScore: normalizeScore(obj.overallScore),
     scores: {
       visualHierarchy: normalizeScore(obj?.scores?.visualHierarchy),
@@ -55,24 +49,19 @@ function normalizeCritique(obj) {
       ? obj.improvedHeadlineOptions.filter(Boolean).slice(0, 5)
       : [],
   };
-
-  return normalized;
 }
 
 export function getCritiqueObject(aiJson) {
   try {
     if (!aiJson) return null;
 
-    // Case 1: already object or JSON string
     const base = typeof aiJson === "string" ? JSON.parse(aiJson) : aiJson;
     if (!base) return null;
 
-    // If already clean critique
     if (base.overallScore !== undefined) {
       return normalizeCritique(base);
     }
 
-    // Case 2: Gemini wrapped response
     const parts = base?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts) || parts.length === 0) return null;
 
@@ -84,7 +73,7 @@ export function getCritiqueObject(aiJson) {
 
     const parsed = JSON.parse(jsonText);
     return normalizeCritique(parsed);
-  } catch (e) {
+  } catch {
     return null;
   }
 }
