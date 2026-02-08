@@ -72,7 +72,7 @@ public class GeminiAdAnalysisService {
     },
     "generationConfig", Map.of(
         "temperature", 0.3,
-        "maxOutputTokens", 300,
+        "maxOutputTokens", 600,
         "responseMimeType", "application/json"
     )
 );
