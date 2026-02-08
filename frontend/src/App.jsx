@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import UploadComponent from "./components/UploadComponent.jsx";
 import HistoryTable from "./components/HistoryTable.jsx";
+import HistoryModal from "./components/HistoryModal.jsx";
 
 function safeJsonParse(s) {
   try { return JSON.parse(s); } catch { return null; }
@@ -10,6 +11,8 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [selected, setSelected] = useState(null);
   const [loadError, setLoadError] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+
 
   const API = import.meta.env.VITE_API_BASE || "http://localhost:8080";
 
@@ -40,9 +43,11 @@ export default function App() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
           <UploadComponent
             onUploaded={(item) => {
-              setSelected(item);
-              loadHistory();
-            }}
+  setSelected(item);
+  setModalOpen(true);
+  loadHistory();
+}}
+
           />
 
           <div className="bg-white rounded-xl shadow p-6">
@@ -135,7 +140,17 @@ export default function App() {
                 History load failed: {loadError}
               </div>
             )}
-            <HistoryTable rows={history} onSelect={(r) => setSelected(r)} />
+<HistoryTable
+  rows={history}
+  onSelect={(r) => { setSelected(r); setModalOpen(true); }}
+/>
+<HistoryModal
+  open={modalOpen}
+  row={selected}
+  onClose={() => setModalOpen(false)}
+/>
+
+
           </div>
         </div>
       </div>
