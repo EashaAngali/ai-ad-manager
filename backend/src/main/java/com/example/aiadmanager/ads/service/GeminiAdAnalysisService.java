@@ -2,16 +2,16 @@ package com.example.aiadmanager.ads.service;
 
 import com.example.aiadmanager.ads.model.AdCritique;
 import com.example.aiadmanager.ads.repo.AdCritiqueRepository;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import java.time.Duration;
 
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Map;
 
@@ -20,10 +20,12 @@ public class GeminiAdAnalysisService {
 
     private final AdCritiqueRepository repo;
     private final WebClient webClient;
+    private final ObjectMapper mapper = new ObjectMapper();
 
     @Value("${app.gemini.apiKey:}")
     private String apiKey;
 
+    // Use model names like: gemini-2.5-flash or gemini-2.5-flash-lite
     @Value("${app.gemini.model:gemini-2.5-flash}")
     private String model;
 
@@ -49,7 +51,7 @@ public class GeminiAdAnalysisService {
                 "Return STRICT JSON only (no markdown, no extra text). " +
                 "Schema:\n" +
                 "{\n" +
-                "  \"overallScore\": number, (0-10)\n" +
+                "  \"overallScore\": number,\n" +
                 "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
                 "  \"strengths\": string[],\n" +
                 "  \"issues\": string[],\n" +
@@ -57,31 +59,27 @@ public class GeminiAdAnalysisService {
                 "  \"improvedHeadlineOptions\": string[]\n" +
                 "}";
 
-   Map<String, Object> body = Map.of(
-    "contents", new Object[]{
-        Map.of(
-            "role", "user",
-            "parts", new Object[]{
-                Map.of("text", prompt),
-                Map.of("inlineData", Map.of(
-                    "mimeType", contentType,
-                    "data", b64
-                ))
-            }
-        )
-    },
-    "generationConfig", Map.of(
-        "temperature", 0.3,
-        "maxOutputTokens", 1200,
-        
-    )
-);
+        Map<String, Object> body = Map.of(
+                "contents", new Object[]{
+                        Map.of(
+                                "role", "user",
+                                "parts", new Object[]{
+                                        Map.of("text", prompt),
+                                        Map.of("inlineData", Map.of(
+                                                "mimeType", contentType,
+                                                "data", b64
+                                        ))
+                                )
+                        )
+                },
+                "generationConfig", Map.of(
+                        "temperature", 0.3,
+                        "maxOutputTokens", 1200
+                )
+        );
 
-
-        
-       String url = "https://generativelanguage.googleapis.com/v1beta/models/"
-        + model + ":generateContent?key=" + apiKey;
-
+        String url = "https://generativelanguage.googleapis.com/v1beta/models/"
+                + model + ":generateContent?key=" + apiKey;
 
         String aiRaw;
         try {
@@ -91,35 +89,14 @@ public class GeminiAdAnalysisService {
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .block(Duration.ofSeconds(45));
-
+                    .block(Duration.ofSeconds(60));
         } catch (WebClientResponseException e) {
             throw new RuntimeException("Gemini API failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
         } catch (Exception e) {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
-String cleanJson;
-ObjectMapper mapper = new ObjectMapper();
-JsonNode root = mapper.readTree(aiRaw);
 
-JsonNode parts0 = root.path("candidates").path(0).path("content").path("parts").path(0);
-
-// 1) get model output as string
-String txt = parts0.path("text").asText(null);
-if (txt == null || txt.isBlank()) {
-    cleanJson = aiRaw; // fallback
-} else {
-    // 2) sometimes it returns JSON string wrapped in quotes -> unwrap
-    txt = txt.trim();
-    if (txt.startsWith("\"") && txt.endsWith("\"")) {
-        txt = mapper.readValue(txt, String.class); // unescape string
-    }
-    // 3) validate JSON
-    mapper.readTree(txt);
-    cleanJson = txt;
-}
-
-
+        String cleanJson = extractCleanJson(aiRaw);
 
         AdCritique saved = repo.save(new AdCritique(
                 StringUtils.hasText(originalFilename) ? originalFilename : "upload",
@@ -129,5 +106,39 @@ if (txt == null || txt.isBlank()) {
         ));
 
         return saved;
+    }
+
+    private String extractCleanJson(String aiRaw) {
+        try {
+            JsonNode root = mapper.readTree(aiRaw);
+
+            JsonNode candidates = root.path("candidates");
+            if (!candidates.isArray() || candidates.size() == 0) {
+                return aiRaw;
+            }
+
+            JsonNode parts0 = candidates.path(0).path("content").path("parts").path(0);
+
+            // most common: {"text": "{...json...}"}
+            String txt = parts0.path("text").asText(null);
+
+            if (txt == null || txt.isBlank()) {
+                return aiRaw;
+            }
+
+            txt = txt.trim();
+
+            // if returned as a quoted JSON string, unescape it
+            if (txt.startsWith("\"") && txt.endsWith("\"")) {
+                txt = mapper.readValue(txt, String.class);
+            }
+
+            // validate final json
+            mapper.readTree(txt);
+            return txt;
+
+        } catch (Exception ex) {
+            return aiRaw;
+        }
     }
 }
