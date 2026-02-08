@@ -44,7 +44,7 @@ export default function HistoryModal({ open, row, onClose }) {
       {/* Modal */}
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div
-          className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden"
+         className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between px-5 py-4 border-b">
@@ -64,7 +64,7 @@ export default function HistoryModal({ open, row, onClose }) {
             </button>
           </div>
 
-          <div className="p-5 grid gap-4 md:grid-cols-2">
+         <div className="p-5 grid gap-4 md:grid-cols-2 overflow-auto">
             {/* Image */}
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Uploaded Image</div>
