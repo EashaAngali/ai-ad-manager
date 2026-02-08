@@ -25,7 +25,6 @@ public class GeminiAdAnalysisService {
     @Value("${app.gemini.apiKey:}")
     private String apiKey;
 
-    // Use model names like: gemini-2.5-flash or gemini-2.5-flash-lite
     @Value("${app.gemini.model:gemini-2.5-flash}")
     private String model;
 
@@ -46,9 +45,11 @@ public class GeminiAdAnalysisService {
 
         String b64 = Base64.getEncoder().encodeToString(imageBytes);
 
+        // IMPORTANT: keep it short to avoid MAX_TOKENS
         String prompt =
-                "Analyze this advertisement for visual hierarchy, copy effectiveness, and color theory. " +
-                "Return STRICT JSON only (no markdown, no extra text). " +
+                "You are an ad analysis engine.\n" +
+                "Return ONLY valid JSON. No markdown. No extra text.\n" +
+                "Keep arrays short: max 4 strengths, 4 issues, 4 fixes, 5 headlines.\n" +
                 "Schema:\n" +
                 "{\n" +
                 "  \"overallScore\": number,\n" +
@@ -74,7 +75,8 @@ public class GeminiAdAnalysisService {
                 },
                 "generationConfig", Map.of(
                         "temperature", 0.3,
-                        "maxOutputTokens", 1800
+                        "maxOutputTokens", 1800,
+                        "responseMimeType", "application/json"
                 )
         );
 
@@ -96,7 +98,8 @@ public class GeminiAdAnalysisService {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
 
-        String cleanJson = extractCleanJson(aiRaw);
+        // If Gemini sends junk/truncated JSON, we FAIL instead of saving garbage
+        String cleanJson = extractCleanJsonOrThrow(aiRaw);
 
         AdCritique saved = repo.save(new AdCritique(
                 StringUtils.hasText(originalFilename) ? originalFilename : "upload",
@@ -108,37 +111,54 @@ public class GeminiAdAnalysisService {
         return saved;
     }
 
-    private String extractCleanJson(String aiRaw) {
+    private String extractCleanJsonOrThrow(String aiRaw) {
         try {
             JsonNode root = mapper.readTree(aiRaw);
 
             JsonNode candidates = root.path("candidates");
             if (!candidates.isArray() || candidates.size() == 0) {
-                return aiRaw;
+                throw new RuntimeException("Gemini: no candidates in response");
             }
 
-            JsonNode parts0 = candidates.path(0).path("content").path("parts").path(0);
-
-            // most common: {"text": "{...json...}"}
-            String txt = parts0.path("text").asText(null);
-
-            if (txt == null || txt.isBlank()) {
-                return aiRaw;
+            JsonNode parts = candidates.path(0).path("content").path("parts");
+            if (!parts.isArray() || parts.size() == 0) {
+                throw new RuntimeException("Gemini: no parts in response");
             }
 
-            txt = txt.trim();
-
-            // if returned as a quoted JSON string, unescape it
-            if (txt.startsWith("\"") && txt.endsWith("\"")) {
-                txt = mapper.readValue(txt, String.class);
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode p : parts) {
+                String t = p.path("text").asText("");
+                if (!t.isBlank()) sb.append(t);
             }
+
+            String txt = sb.toString().trim();
+            if (txt.isBlank()) {
+                // sometimes model returns structured json directly
+                // fallback: try content itself
+                txt = candidates.path(0).path("content").toString();
+            }
+
+            // remove ``` fences if model adds them
+            txt = txt.replaceAll("(?s)^```json\\s*", "")
+                     .replaceAll("(?s)^```\\s*", "")
+                     .replaceAll("(?s)```\\s*$", "")
+                     .trim();
 
             // validate final json
             mapper.readTree(txt);
+
+            // extra safety: must look like critique schema
+            JsonNode critique = mapper.readTree(txt);
+            if (critique.path("overallScore").isMissingNode()) {
+                throw new RuntimeException("Gemini returned JSON but not the expected critique schema");
+            }
+
             return txt;
 
         } catch (Exception ex) {
-            return aiRaw;
+            // DO NOT save aiRaw; it breaks UI
+            throw new RuntimeException("Invalid / truncated Gemini JSON. " +
+                    "Increase tokens or shorten prompt. Raw: " + aiRaw, ex);
         }
     }
 }
