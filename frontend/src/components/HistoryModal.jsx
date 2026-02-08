@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { getCritiqueObject } from "./critique";
 
 export default function HistoryModal({ open, row, onClose }) {
@@ -11,16 +12,29 @@ export default function HistoryModal({ open, row, onClose }) {
     onClose?.();
   };
 
+  // ✅ Lock background scroll when modal is open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50">
+      {/* Backdrop */}
       <div className="absolute inset-0 bg-black/50" onClick={close} />
 
+      {/* Modal wrapper */}
       <div className="absolute inset-0 flex items-center justify-center p-4">
+        {/* ✅ Modal: flex column + max height */}
         <div
-          className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden"
+          className="w-full max-w-4xl bg-white rounded-xl shadow-xl overflow-hidden flex flex-col max-h-[90vh]"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="flex items-center justify-between px-5 py-4 border-b">
+          {/* ✅ Header fixed */}
+          <div className="flex items-center justify-between px-5 py-4 border-b shrink-0">
             <div>
               <h3 className="text-lg font-semibold">Analysis</h3>
               <p className="text-sm text-gray-500">
@@ -37,7 +51,9 @@ export default function HistoryModal({ open, row, onClose }) {
             </button>
           </div>
 
-          <div className="p-5 grid gap-4 md:grid-cols-2">
+          {/* ✅ BODY scrollable */}
+          <div className="p-5 grid gap-4 md:grid-cols-2 overflow-y-auto flex-1">
+            {/* Image */}
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Uploaded Image</div>
               {row.imageBase64 ? (
@@ -51,6 +67,7 @@ export default function HistoryModal({ open, row, onClose }) {
               )}
             </div>
 
+            {/* Critique */}
             <div className="rounded-lg border p-3">
               <div className="text-sm font-semibold mb-2">Critique</div>
 
@@ -117,7 +134,15 @@ export default function HistoryModal({ open, row, onClose }) {
             </div>
           </div>
 
-          <div className="px-5 py-4 border-t flex justify-end gap-2">
+          {/* ✅ Footer always visible */}
+          <div className="px-5 py-4 border-t shrink-0 bg-white flex justify-end gap-2">
+            <button
+              type="button"
+              className="px-3 py-2 rounded-md border border-gray-300 hover:border-black"
+              onClick={close}
+            >
+              Close
+            </button>
             <button
               type="button"
               className="px-3 py-2 rounded-md bg-black text-white"
@@ -131,4 +156,3 @@ export default function HistoryModal({ open, row, onClose }) {
     </div>
   );
 }
-
