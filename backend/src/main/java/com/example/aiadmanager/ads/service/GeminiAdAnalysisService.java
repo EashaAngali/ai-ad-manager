@@ -35,7 +35,7 @@ public class GeminiAdAnalysisService {
 
     public AdCritique analyzeAndSave(byte[] imageBytes, String originalFilename, String contentType) {
         if (!StringUtils.hasText(apiKey)) {
-            throw new IllegalStateException("GEMINI_API_KEY missing. Set it as an environment variable.");
+            throw new IllegalStateException("GEMINI_API_KEY missing.");
         }
 
         if (!StringUtils.hasText(contentType) ||
@@ -45,20 +45,11 @@ public class GeminiAdAnalysisService {
 
         String b64 = Base64.getEncoder().encodeToString(imageBytes);
 
-        // IMPORTANT: keep it short to avoid MAX_TOKENS
         String prompt =
-                "You are an ad analysis engine.\n" +
-                "Return ONLY valid JSON. No markdown. No extra text.\n" +
-                "Keep arrays short: max 4 strengths, 4 issues, 4 fixes, 5 headlines.\n" +
-                "Schema:\n" +
-                "{\n" +
-                "  \"overallScore\": number,\n" +
-                "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
-                "  \"strengths\": string[],\n" +
-                "  \"issues\": string[],\n" +
-                "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
-                "  \"improvedHeadlineOptions\": string[]\n" +
-                "}";
+                "Return ONLY valid JSON (no markdown, no extra keys). " +
+                "Shape: {overallScore:number,scores:{visualHierarchy:number,copyEffectiveness:number,colorTheory:number}," +
+                "strengths:string[],issues:string[],actionableFixes:{title:string,why:string,how:string}[],improvedHeadlineOptions:string[]}. " +
+                "Limits: strengths<=5, issues<=5, actionableFixes<=3, improvedHeadlineOptions<=5.";
 
         Map<String, Object> body = Map.of(
                 "contents", new Object[]{
@@ -66,16 +57,16 @@ public class GeminiAdAnalysisService {
                                 "role", "user",
                                 "parts", new Object[]{
                                         Map.of("text", prompt),
-                                        Map.of("inlineData", Map.of(
-                                                "mimeType", contentType,
+                                        Map.of("inline_data", Map.of(
+                                                "mime_type", contentType,
                                                 "data", b64
                                         ))
                                 }
                         )
                 },
                 "generationConfig", Map.of(
-                        "temperature", 0.3,
-                        "maxOutputTokens", 1800,
+                        "temperature", 0.2,
+                        "maxOutputTokens", 2048,
                         "responseMimeType", "application/json"
                 )
         );
@@ -98,67 +89,57 @@ public class GeminiAdAnalysisService {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
 
-        // If Gemini sends junk/truncated JSON, we FAIL instead of saving garbage
         String cleanJson = extractCleanJsonOrThrow(aiRaw);
 
-        AdCritique saved = repo.save(new AdCritique(
+        return repo.save(new AdCritique(
                 StringUtils.hasText(originalFilename) ? originalFilename : "upload",
                 contentType,
                 b64,
                 cleanJson
         ));
-
-        return saved;
     }
 
     private String extractCleanJsonOrThrow(String aiRaw) {
         try {
             JsonNode root = mapper.readTree(aiRaw);
-
             JsonNode candidates = root.path("candidates");
-            if (!candidates.isArray() || candidates.size() == 0) {
-                throw new RuntimeException("Gemini: no candidates in response");
+            if (!candidates.isArray() || candidates.isEmpty()) {
+                throw new RuntimeException("Gemini: no candidates");
             }
 
             JsonNode parts = candidates.path(0).path("content").path("parts");
-            if (!parts.isArray() || parts.size() == 0) {
-                throw new RuntimeException("Gemini: no parts in response");
+            if (!parts.isArray() || parts.isEmpty()) {
+                throw new RuntimeException("Gemini: no parts");
             }
 
             StringBuilder sb = new StringBuilder();
             for (JsonNode p : parts) {
-                String t = p.path("text").asText("");
-                if (!t.isBlank()) sb.append(t);
+                if (p.has("text")) {
+                    String t = p.path("text").asText("");
+                    if (!t.isBlank()) sb.append(t);
+                } else {
+                    // sometimes structured json lands here
+                    sb.append(p.toString());
+                }
             }
 
             String txt = sb.toString().trim();
-            if (txt.isBlank()) {
-                // sometimes model returns structured json directly
-                // fallback: try content itself
-                txt = candidates.path(0).path("content").toString();
-            }
 
-            // remove ``` fences if model adds them
             txt = txt.replaceAll("(?s)^```json\\s*", "")
                      .replaceAll("(?s)^```\\s*", "")
                      .replaceAll("(?s)```\\s*$", "")
                      .trim();
 
-            // validate final json
-            mapper.readTree(txt);
-
-            // extra safety: must look like critique schema
             JsonNode critique = mapper.readTree(txt);
+
             if (critique.path("overallScore").isMissingNode()) {
-                throw new RuntimeException("Gemini returned JSON but not the expected critique schema");
+                throw new RuntimeException("JSON valid but schema mismatch (missing overallScore)");
             }
 
             return txt;
 
         } catch (Exception ex) {
-            // DO NOT save aiRaw; it breaks UI
-            throw new RuntimeException("Invalid / truncated Gemini JSON. " +
-                    "Increase tokens or shorten prompt. Raw: " + aiRaw, ex);
+            throw new RuntimeException("Invalid / truncated Gemini JSON. Raw: " + aiRaw, ex);
         }
     }
 }
