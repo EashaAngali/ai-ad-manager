@@ -6,6 +6,35 @@ import HistoryModal from "./components/HistoryModal.jsx";
 function safeJsonParse(s) {
   try { return JSON.parse(s); } catch { return null; }
 }
+function getCritiqueObject(aiJson) {
+  try {
+    const obj = typeof aiJson === "string" ? JSON.parse(aiJson) : aiJson;
+    if (!obj) return null;
+
+    // already clean critique
+    if (obj.overallScore !== undefined) return obj;
+
+    // Gemini wrapper -> extract candidates[0].content.parts[].text
+    const parts = obj?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      const text = parts.map(p => p.text || "").join("").trim();
+      if (!text) return null;
+
+      // remove ``` fences if any
+      const cleaned = text
+        .replace(/^```json\s*/i, "")
+        .replace(/^```\s*/i, "")
+        .replace(/```$/i, "")
+        .trim();
+
+      return JSON.parse(cleaned);
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function App() {
   const [history, setHistory] = useState([]);
@@ -30,7 +59,8 @@ export default function App() {
 
   useEffect(() => { loadHistory(); }, []);
 
-  const parsed = selected ? safeJsonParse(selected.aiJson) : null;
+const parsed = selected ? getCritiqueObject(selected.aiJson) : null;
+
 
   return (
     <div className="min-h-screen bg-gray-100">
