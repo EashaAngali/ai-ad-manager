@@ -1,3 +1,4 @@
+import { getCritiqueObject } from "./critique";
 
 export default function HistoryModal({ open, row, onClose }) {
   if (!open || !row) return null;
