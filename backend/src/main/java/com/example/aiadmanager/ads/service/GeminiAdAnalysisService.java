@@ -8,6 +8,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
 
 import java.util.Base64;
 import java.util.Map;
@@ -21,7 +24,7 @@ public class GeminiAdAnalysisService {
     @Value("${app.gemini.apiKey:}")
     private String apiKey;
 
-    @Value("${app.gemini.model:gemini-2.5-flash}")
+    @Value("${app.gemini.model:gemini-2.5-flash-lite}")
     private String model;
 
     public GeminiAdAnalysisService(AdCritiqueRepository repo) {
@@ -69,7 +72,7 @@ public class GeminiAdAnalysisService {
     },
     "generationConfig", Map.of(
         "temperature", 0.3,
-        "maxOutputTokens", 512,
+        "maxOutputTokens", 300,
         "responseMimeType", "application/json"
     )
 );
@@ -88,18 +91,40 @@ public class GeminiAdAnalysisService {
                     .bodyValue(body)
                     .retrieve()
                     .bodyToMono(String.class)
-                    .block();
+                    .block(Duration.ofSeconds(45));
+
         } catch (WebClientResponseException e) {
             throw new RuntimeException("Gemini API failed: " + e.getStatusCode() + " " + e.getResponseBodyAsString(), e);
         } catch (Exception e) {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
+String cleanJson;
+try {
+    ObjectMapper mapper = new ObjectMapper();
+    JsonNode root = mapper.readTree(aiRaw);
+
+    JsonNode parts0 = root.path("candidates").path(0).path("content").path("parts").path(0);
+
+    if (parts0.has("text")) {
+        cleanJson = parts0.path("text").asText();
+    } else {
+        // if model returned structured json instead of text
+        cleanJson = parts0.toString();
+    }
+
+    // ensure valid JSON
+    mapper.readTree(cleanJson);
+
+} catch (Exception ex) {
+    cleanJson = aiRaw;
+}
+
 
         AdCritique saved = repo.save(new AdCritique(
                 StringUtils.hasText(originalFilename) ? originalFilename : "upload",
                 contentType,
                 b64,
-                aiRaw
+                cleanJson
         ));
 
         return saved;
