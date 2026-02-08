@@ -99,25 +99,26 @@ public class GeminiAdAnalysisService {
             throw new RuntimeException("Gemini call failed: " + e.getMessage(), e);
         }
 String cleanJson;
-try {
-    ObjectMapper mapper = new ObjectMapper();
-    JsonNode root = mapper.readTree(aiRaw);
+ObjectMapper mapper = new ObjectMapper();
+JsonNode root = mapper.readTree(aiRaw);
 
-    JsonNode parts0 = root.path("candidates").path(0).path("content").path("parts").path(0);
+JsonNode parts0 = root.path("candidates").path(0).path("content").path("parts").path(0);
 
-    if (parts0.has("text")) {
-        cleanJson = parts0.path("text").asText();
-    } else {
-        // if model returned structured json instead of text
-        cleanJson = parts0.toString();
+// 1) get model output as string
+String txt = parts0.path("text").asText(null);
+if (txt == null || txt.isBlank()) {
+    cleanJson = aiRaw; // fallback
+} else {
+    // 2) sometimes it returns JSON string wrapped in quotes -> unwrap
+    txt = txt.trim();
+    if (txt.startsWith("\"") && txt.endsWith("\"")) {
+        txt = mapper.readValue(txt, String.class); // unescape string
     }
-
-    // ensure valid JSON
-    mapper.readTree(cleanJson);
-
-} catch (Exception ex) {
-    cleanJson = aiRaw;
+    // 3) validate JSON
+    mapper.readTree(txt);
+    cleanJson = txt;
 }
+
 
 
         AdCritique saved = repo.save(new AdCritique(
