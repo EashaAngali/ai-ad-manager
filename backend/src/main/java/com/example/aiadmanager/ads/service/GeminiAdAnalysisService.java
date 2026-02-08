@@ -48,12 +48,11 @@ public class GeminiAdAnalysisService {
 
         String b64 = Base64.getEncoder().encodeToString(imageBytes);
 
-        // 1) First attempt: strict JSON, forced non-empty arrays
-        String prompt = buildPrimaryPrompt();
-        String aiRaw = callGeminiWithImage(prompt, b64, contentType, 1400);
+        // 1) Analyze image (JSON required)
+        String aiRaw = callGeminiWithImage(buildPrimaryPrompt(), b64, contentType, 1200);
 
-        // 2) Extract JSON safely + auto-repair if truncated
-        String cleanJson = extractOrRepair(aiRaw);
+        // 2) Try parse; if fails, regenerate clean JSON from scratch
+        String cleanJson = extractOrRegenerate(aiRaw);
 
         return repo.save(new AdCritique(
                 StringUtils.hasText(originalFilename) ? originalFilename : "upload",
@@ -70,31 +69,32 @@ public class GeminiAdAnalysisService {
                 "strengths:string[],issues:string[],actionableFixes:{title:string,why:string,how:string}[],improvedHeadlineOptions:string[]}. " +
                 "HARD RULES: strengths MUST have exactly 5 items; issues MUST have exactly 5 items; " +
                 "actionableFixes MUST have exactly 3 items; improvedHeadlineOptions MUST have exactly 5 items. " +
-                "Never return empty arrays. Keep each item concise (<= 160 chars).";
+                "Never return empty arrays. Keep each item concise (<= 140 chars).";
     }
 
-    private String buildRepairPrompt(String brokenText) {
+    private String buildRegeneratePromptFromBroken(String brokenMaybeJson) {
+        // Key change: we are NOT "repairing" partial JSON anymore.
+        // We are asking Gemini to generate a complete valid JSON from scratch.
         return
-                "You will be given a possibly TRUNCATED or INVALID JSON string. " +
-                "Fix it into VALID JSON that matches the exact schema below. " +
-                "Return ONLY the fixed JSON. No markdown. No explanations.\n\n" +
+                "The previous output was TRUNCATED/INVALID. Ignore it and generate a fresh response from scratch.\n" +
+                "Return ONLY valid JSON (no markdown, no extra keys).\n" +
                 "Schema EXACTLY:\n" +
                 "{\n" +
                 "  \"overallScore\": number,\n" +
                 "  \"scores\": {\"visualHierarchy\": number, \"copyEffectiveness\": number, \"colorTheory\": number},\n" +
-                "  \"strengths\": string[],\n" +
-                "  \"issues\": string[],\n" +
-                "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}],\n" +
-                "  \"improvedHeadlineOptions\": string[]\n" +
-                "}\n\n" +
+                "  \"strengths\": string[5],\n" +
+                "  \"issues\": string[5],\n" +
+                "  \"actionableFixes\": [{\"title\": string, \"why\": string, \"how\": string}][3],\n" +
+                "  \"improvedHeadlineOptions\": string[5]\n" +
+                "}\n" +
                 "Rules:\n" +
-                "- Keep existing values if present.\n" +
-                "- If a field is missing, add it, BUT never leave arrays empty.\n" +
-                "- strengths MUST have exactly 5 items; issues MUST have exactly 5 items; actionableFixes MUST have exactly 3 items; improvedHeadlineOptions MUST have exactly 5 items.\n" +
-                "- Enforce max limits: strengths<=5, issues<=5, fixes<=3, headlines<=5.\n" +
-                "- Keep each item concise (<= 160 chars).\n\n" +
-                "BROKEN_JSON:\n" +
-                brokenText;
+                "- strengths MUST be 5 items (no empty).\n" +
+                "- issues MUST be 5 items (no empty).\n" +
+                "- actionableFixes MUST be 3 items (no empty).\n" +
+                "- improvedHeadlineOptions MUST be 5 items (no empty).\n" +
+                "- Keep each item <= 140 chars.\n\n" +
+                "TRUNCATED_OUTPUT_FOR_REFERENCE (ignore it if needed):\n" +
+                brokenMaybeJson;
     }
 
     private String callGeminiWithImage(String prompt, String imageB64, String contentType, int maxOutputTokens) {
@@ -169,57 +169,42 @@ public class GeminiAdAnalysisService {
         }
     }
 
-    private String extractOrRepair(String aiRaw) {
-        JsonNode root;
-        try {
-            root = mapper.readTree(aiRaw);
-        } catch (Exception e) {
-            return repairFromBroken(aiRaw);
+    private String extractOrRegenerate(String aiRaw) {
+        // Try to extract text from wrapper then parse JSON.
+        String candidateText = extractCandidateText(aiRaw);
+
+        // If already valid JSON, return it
+        if (isValidCritiqueJson(candidateText)) {
+            return candidateText;
         }
 
-        JsonNode candidates = root.path("candidates");
-        if (!candidates.isArray() || candidates.isEmpty()) {
-            throw new RuntimeException("Gemini: no candidates. Raw: " + aiRaw);
+        // If invalid/truncated, regenerate from scratch (text-only)
+        String regenPrompt = buildRegeneratePromptFromBroken(candidateText.isBlank() ? aiRaw : candidateText);
+        String regenRaw = callGeminiTextOnly(regenPrompt, 1400);
+
+        String regenText = extractCandidateText(regenRaw);
+        if (!isValidCritiqueJson(regenText)) {
+            throw new RuntimeException("Invalid / truncated Gemini JSON even after regenerate. Raw: " + regenRaw);
         }
-
-        String text = extractPartsText(candidates.path(0).path("content").path("parts")).trim();
-        String cleaned = stripCodeFences(text);
-
-        if (isValidCritiqueJson(cleaned)) {
-            return cleaned;
-        }
-
-        String broken = !cleaned.isBlank() ? cleaned : text;
-        return repairFromBroken(broken);
+        return regenText;
     }
 
-    private String repairFromBroken(String broken) {
-        String repairPrompt = buildRepairPrompt(broken);
-        String repairRaw = callGeminiTextOnly(repairPrompt, 1200);
-
+    private String extractCandidateText(String raw) {
         try {
-            JsonNode root2 = mapper.readTree(repairRaw);
-            JsonNode candidates2 = root2.path("candidates");
-            if (!candidates2.isArray() || candidates2.isEmpty()) {
-                throw new RuntimeException("Gemini repair: no candidates. Raw: " + repairRaw);
-            }
+            JsonNode root = mapper.readTree(raw);
+            JsonNode candidates = root.path("candidates");
+            if (!candidates.isArray() || candidates.isEmpty()) return "";
 
-            String repairedText = extractPartsText(candidates2.path(0).path("content").path("parts")).trim();
-            repairedText = stripCodeFences(repairedText);
-
-            if (!isValidCritiqueJson(repairedText)) {
-                throw new RuntimeException("Gemini repair returned invalid JSON. Raw: " + repairRaw);
-            }
-
-            return repairedText;
-        } catch (Exception ex) {
-            throw new RuntimeException("Invalid / truncated Gemini JSON. Raw: " + broken, ex);
+            String text = extractPartsText(candidates.path(0).path("content").path("parts")).trim();
+            return stripCodeFences(text);
+        } catch (Exception e) {
+            // raw might already be plain JSON string
+            return stripCodeFences(raw == null ? "" : raw.trim());
         }
     }
 
     private String extractPartsText(JsonNode parts) {
         if (!parts.isArray() || parts.isEmpty()) return "";
-
         StringBuilder sb = new StringBuilder();
         for (JsonNode p : parts) {
             if (p.has("text")) {
@@ -251,11 +236,10 @@ public class GeminiAdAnalysisService {
             if (!critique.has("actionableFixes")) return false;
             if (!critique.has("improvedHeadlineOptions")) return false;
 
-            // ALSO enforce non-empty arrays (your requirement)
-            if (!critique.path("strengths").isArray() || critique.path("strengths").size() == 0) return false;
-            if (!critique.path("issues").isArray() || critique.path("issues").size() == 0) return false;
-            if (!critique.path("actionableFixes").isArray() || critique.path("actionableFixes").size() == 0) return false;
-            if (!critique.path("improvedHeadlineOptions").isArray() || critique.path("improvedHeadlineOptions").size() == 0) return false;
+            if (!critique.path("strengths").isArray() || critique.path("strengths").size() < 5) return false;
+            if (!critique.path("issues").isArray() || critique.path("issues").size() < 5) return false;
+            if (!critique.path("actionableFixes").isArray() || critique.path("actionableFixes").size() < 3) return false;
+            if (!critique.path("improvedHeadlineOptions").isArray() || critique.path("improvedHeadlineOptions").size() < 5) return false;
 
             return true;
         } catch (JsonProcessingException e) {
